@@ -20,40 +20,49 @@ jobs:
           pip install --upgrade pip
           pip install --no-cache-dir gdown pydrive
 
-      - name: Upload latest CSV to Google Drive
-        env:
-          DRIVE_CREDENTIALS_JSON: ${{ secrets.DRIVE_CREDENTIALS_JSON }}
-          GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
+      - name: Prepare environment
         run: |
           echo "$DRIVE_CREDENTIALS_JSON" > creds.json
-
-          # 获取最新的 CSV 文件（以"股票池合并_核准_"开头）
           LATEST_CSV=$(ls -t data/股票池合并_核准_*.csv | head -n 1)
-          echo "Latest CSV file is: $LATEST_CSV"
+          echo "LATEST_CSV=$LATEST_CSV" >> $GITHUB_ENV
+        env:
+          DRIVE_CREDENTIALS_JSON: ${{ secrets.DRIVE_CREDENTIALS_JSON }}
 
-          python - <<EOF
+      - name: Upload latest CSV to Google Drive
+        env:
+          GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
+        run: |
+          python <<EOF
 import os
 from pydrive.auth import GoogleAuth
 from pydrive.drive import GoogleDrive
 
-# 设置凭证
-with open("creds.json", "w") as f:
-    f.write(os.environ["DRIVE_CREDENTIALS_JSON"])
+try:
+    creds_path = "creds.json"
+    latest_csv = os.environ["LATEST_CSV"]
+    folder_id = os.environ["GDRIVE_FOLDER_ID"]
 
-gauth = GoogleAuth()
-gauth.LoadCredentialsFile("creds.json")
-gauth.LocalWebserverAuth()
-gauth.SaveCredentialsFile("creds.json")
+    print(f"Uploading file: {latest_csv}")
 
-drive = GoogleDrive(gauth)
-file_path = os.environ["LATEST_CSV"]
-file_name = os.path.basename(file_path)
+    # 设置 PyDrive 授权
+    gauth = GoogleAuth()
+    gauth.LoadCredentialsFile(creds_path)
+    if gauth.credentials is None:
+        gauth.LocalWebserverAuth()
+    else:
+        gauth.Authorize()
+    gauth.SaveCredentialsFile(creds_path)
 
-f = drive.CreateFile({
-    'title': file_name,
-    'parents': [{'id': os.environ["GDRIVE_FOLDER_ID"]}]
-})
-f.SetContentFile(file_path)
-f.Upload()
-print(f"Uploaded {file_name} to Google Drive.")
+    drive = GoogleDrive(gauth)
+
+    file_name = os.path.basename(latest_csv)
+    f = drive.CreateFile({'title': file_name, 'parents': [{'id': folder_id}]})
+    f.SetContentFile(latest_csv)
+    f.Upload()
+
+    print(f"✅ Upload successful: {file_name}")
+
+except Exception as e:
+    print(f"❌ Upload failed: {e}")
+    raise SystemExit(1)
 EOF
