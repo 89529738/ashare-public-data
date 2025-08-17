@@ -1,12 +1,11 @@
 name: Upload to Google Drive
 
 on:
-  workflow_dispatch:  # 手动触发
+  workflow_dispatch:
 
 jobs:
   upload:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repo
         uses: actions/checkout@v3
@@ -18,22 +17,43 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install --upgrade pip
-          pip install --no-cache-dir gdown pydrive
+          python -m pip install --upgrade pip
+          pip install --no-cache-dir pydrive
 
       - name: Save credentials to creds.json
-        env:
-          DRIVE_CREDENTIALS_JSON: ${{ secrets.DRIVE_CREDENTIALS_JSON }}
-        run: echo "$DRIVE_CREDENTIALS_JSON" > creds.json
+        run: echo "${{ secrets.DRIVE_CREDENTIALS_JSON }}" > creds.json
 
       - name: Find latest CSV
         id: find_csv
         run: |
-          LATEST_CSV=$(ls -t data/股票池合并_核准_*.csv | head -n 1)
-          echo "LATEST_CSV=$LATEST_CSV" >> $GITHUB_ENV
+          echo "LATEST_CSV=$(ls -t data/股票池合并_核准_*.csv | head -n 1)" >> $GITHUB_ENV
 
       - name: Upload to Google Drive
         env:
           GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
         run: |
+          echo "from pydrive.auth import GoogleAuth
+from pydrive.drive import GoogleDrive
+import os
+
+gauth = GoogleAuth()
+gauth.LoadCredentialsFile('creds.json')
+if gauth.credentials is None:
+    gauth.LocalWebserverAuth()
+elif gauth.access_token_expired:
+    gauth.Refresh()
+else:
+    gauth.Authorize()
+gauth.SaveCredentialsFile('creds.json')
+
+drive = GoogleDrive(gauth)
+file_path = os.environ['LATEST_CSV']
+file_name = os.path.basename(file_path)
+
+f = drive.CreateFile({'title': file_name, 'parents': [{'id': os.environ['GDRIVE_FOLDER_ID']}]})
+f.SetContentFile(file_path)
+f.Upload()
+print(f'Uploaded {file_name} to Google Drive.')
+" > upload_to_gdrive.py
+
           python upload_to_gdrive.py
