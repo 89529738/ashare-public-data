@@ -1,7 +1,7 @@
 name: Upload to Google Drive
 
 on:
-  workflow_dispatch:  # 允许手动触发
+  workflow_dispatch:
 
 jobs:
   upload:
@@ -23,7 +23,8 @@ jobs:
       - name: Save credentials to creds.json
         env:
           DRIVE_CREDENTIALS_JSON: ${{ secrets.DRIVE_CREDENTIALS_JSON }}
-        run: echo "$DRIVE_CREDENTIALS_JSON" > creds.json
+        run: |
+          echo "$DRIVE_CREDENTIALS_JSON" > creds.json
 
       - name: Find latest CSV
         id: find_csv
@@ -35,7 +36,7 @@ jobs:
         env:
           GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
         run: |
-          python <<EOF
+          echo '
 import os
 from pydrive.auth import GoogleAuth
 from pydrive.drive import GoogleDrive
@@ -55,10 +56,12 @@ file_path = os.environ["LATEST_CSV"]
 file_name = os.path.basename(file_path)
 
 f = drive.CreateFile({
-    'title': file_name,
-    'parents': [{'id': os.environ["GDRIVE_FOLDER_ID"]}]
+    "title": file_name,
+    "parents": [{"id": os.environ["GDRIVE_FOLDER_ID"]}]
 })
 f.SetContentFile(file_path)
 f.Upload()
 print(f"Uploaded {file_name} to Google Drive.")
-EOF
+          ' > upload_to_gdrive.py
+
+          python upload_to_gdrive.py
