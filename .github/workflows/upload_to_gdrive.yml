@@ -9,46 +9,65 @@ jobs:
 
     steps:
       - name: Checkout repo
+      # 取仓库内容（包含 data 目录）
         uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: "3.10"
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install --no-cache-dir google-api-python-client google-auth google-auth-oauthlib google-auth-httplib2
+          pip install --no-cache-dir \
+            google-api-python-client google-auth google-auth-oauthlib google-auth-httplib2
 
-      # 寻找最新一份 CSV（你的目录/前缀保持不变）
-      - name: Find latest CSV
-        run: |
-          set -e
-          LATEST_CSV=$(ls -t "data/股票池合并_核准_*.csv" 2>/dev/null | head -n 1 || true)
-          if [ -z "$LATEST_CSV" ]; then
-            echo "没有匹配到 data/股票池合并_核准_*.csv"
-            exit 1
-          fi
-          echo "LATEST_CSV=$LATEST_CSV" >> $GITHUB_ENV
-          echo "✅ 选中的文件：$LATEST_CSV"
-
-      # 关键：写入北京时间(UTC+8)的 YYYYMMDD 到环境变量 DATE_TAG
+      # 关键：写入北京时间（YYYYMMDD）
       - name: Set CN date (YYYYMMDD)
+        run: echo "DATE_TAG=$(TZ=Asia/Shanghai date +%Y%m%d)" >> $GITHUB_ENV
+
+      # 选择要上传的 CSV（优先已有的 *_YYYYMMDD.csv；否则用 latest 复制成当天日期）
+      - name: Pick CSV to upload
+        shell: bash
         run: |
-          DATE_TAG=$(TZ=Asia/Shanghai date +%Y%m%d)
-          echo "DATE_TAG=$DATE_TAG" >> $GITHUB_ENV
-          echo "📅 将使用日期：$DATE_TAG"
+          set -euo pipefail
+
+          # 1) 先找已有的“带日期”的 csv（最后一个是最新）
+          DATE_FILE=$(ls -t data/*_[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].csv 2>/dev/null | head -n 1 || true)
+
+          if [[ -n "${DATE_FILE}" ]]; then
+            PICK="${DATE_FILE}"
+            echo "✅ 找到已带日期的文件：${PICK}"
+          else
+            # 2) 没有带日期的，就找 latest
+            LATEST=$(ls -t data/*_latest.csv 2>/dev/null | head -n 1 || true)
+            if [[ -z "${LATEST}" ]]; then
+              echo "❌ 没有找到 data/*_YYYYMMDD.csv 也没有找到 data/*_latest.csv"
+              exit 1
+            fi
+
+            # 3) 把 latest 复制成当天日期
+            base=$(basename "${LATEST}" _latest.csv)      # 例如：股票池合并_核准_技术指标
+            PICK="data/${base}_${DATE_TAG}.csv"
+            cp -f "${LATEST}" "${PICK}"
+            echo "♻️ 用 latest 生成：${PICK}"
+          fi
+
+          # 写入环境变量，供后续步骤/脚本使用
+          echo "UPLOAD_CSV=${PICK}"    >> $GITHUB_ENV
+          echo "LATEST_CSV=${PICK}"    >> $GITHUB_ENV
+          echo "➡️ 最终将上传：${PICK}"
 
       - name: Upload to Google Drive
         env:
-          # 四个机密来自 Secrets
-          GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
-          GDRIVE_CLIENT_ID: ${{ secrets.GDRIVE_CLIENT_ID }}
+          # 传 GitHub Secrets
+          GDRIVE_FOLDER_ID:     ${{ secrets.GDRIVE_FOLDER_ID }}
+          GDRIVE_CLIENT_ID:     ${{ secrets.GDRIVE_CLIENT_ID }}
           GDRIVE_CLIENT_SECRET: ${{ secrets.GDRIVE_CLIENT_SECRET }}
           GDRIVE_REFRESH_TOKEN: ${{ secrets.GDRIVE_REFRESH_TOKEN }}
-          # 这两个来自上面步骤写入的 GITHUB_ENV（写不写都行，写了更直观）
-          LATEST_CSV: ${{ env.LATEST_CSV }}
-          DATE_TAG: ${{ env.DATE_TAG }}
+
+          # 传给 Python 的文件路径（我们上一步已经写入了）
+          LATEST_CSV:           ${{ env.UPLOAD_CSV }}
         run: |
           python upload_to_gdrive.py
