@@ -40,5 +40,6 @@ jobs:
       - name: Upload to Google Drive
         env:
           GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
+          DRIVE_CREDENTIALS_JSON: ${{ secrets.DRIVE_CREDENTIALS_JSON }}  # ← 新增：把 Secret 注入到本步骤环境
         run: |
           python upload_to_gdrive.py
