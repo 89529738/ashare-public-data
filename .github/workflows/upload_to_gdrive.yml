@@ -1,0 +1,59 @@
+name: Upload to Google Drive
+
+on:
+  workflow_dispatch:  # 允许手动触发
+
+jobs:
+  upload:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install --no-cache-dir gdown pydrive
+
+      - name: Upload latest CSV to Google Drive
+        env:
+          DRIVE_CREDENTIALS_JSON: ${{ secrets.DRIVE_CREDENTIALS_JSON }}
+          GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
+        run: |
+          echo "$DRIVE_CREDENTIALS_JSON" > creds.json
+
+          # 获取最新的 CSV 文件（以"股票池合并_核准_"开头）
+          LATEST_CSV=$(ls -t data/股票池合并_核准_*.csv | head -n 1)
+          echo "Latest CSV file is: $LATEST_CSV"
+
+          python - <<EOF
+import os
+from pydrive.auth import GoogleAuth
+from pydrive.drive import GoogleDrive
+
+# 设置凭证
+with open("creds.json", "w") as f:
+    f.write(os.environ["DRIVE_CREDENTIALS_JSON"])
+
+gauth = GoogleAuth()
+gauth.LoadCredentialsFile("creds.json")
+gauth.LocalWebserverAuth()
+gauth.SaveCredentialsFile("creds.json")
+
+drive = GoogleDrive(gauth)
+file_path = os.environ["LATEST_CSV"]
+file_name = os.path.basename(file_path)
+
+f = drive.CreateFile({
+    'title': file_name,
+    'parents': [{'id': os.environ["GDRIVE_FOLDER_ID"]}]
+})
+f.SetContentFile(file_path)
+f.Upload()
+print(f"Uploaded {file_name} to Google Drive.")
+EOF
