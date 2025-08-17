@@ -1,7 +1,16 @@
 name: Upload to Google Drive
 
 on:
+  # 手动运行
   workflow_dispatch:
+  # 定时：北京时间 17:30（= UTC 09:30），周一至周五
+  schedule:
+    - cron: '30 9 * * 1-5'
+
+# 防重入（可选）
+concurrency:
+  group: upload-to-drive
+  cancel-in-progress: false
 
 jobs:
   upload:
@@ -9,56 +18,59 @@ jobs:
 
     steps:
       - name: Checkout repo
-      # 拉取代码
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install --no-cache-dir google-api-python-client google-auth google-auth-oauthlib google-auth-httplib2
-
-      # 只使用“最新交易日”的带日期文件（data/*_YYYYMMDD.csv），否则报错
-      - name: Find latest dated CSV (YYYYMMDD)
+      # 预检查：只找“今天(中国时区)的带日期CSV”，没有就跳过整个上传流程
+      - name: Precheck – find today's dated CSV (China time)
+        id: precheck
         shell: bash
         run: |
           set -euo pipefail
           shopt -s nullglob
 
-          # 收集所有带日期后缀的 CSV
-          files=(data/*_[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].csv)
+          # 取北京时间今天的日期标签
+          DATE_TAG=$(TZ=Asia/Shanghai date +%Y%m%d)
+          echo "DATE_TAG=$DATE_TAG" >> "$GITHUB_ENV"
 
+          # 查找 data/*_YYYYMMDD.csv
+          files=(data/*_"${DATE_TAG}".csv)
           if [ ${#files[@]} -eq 0 ]; then
-            echo "❌ 没有找到 data/*_YYYYMMDD.csv（请先生成或同步带日期的 CSV）"
-            exit 1
+            echo "has_file=false" >> "$GITHUB_OUTPUT"
+            echo "ℹ️ 今天($DATE_TAG)未发现带日期CSV，流程将跳过上传。"
+            exit 0
           fi
 
-          # 按修改时间排序，取最新一份
-          LATEST_CSV=$(ls -t "${files[@]}" | head -n 1)
+          # 若有多份，取修改时间最新的一份
+          UPLOAD_CSV=$(ls -t "${files[@]}" | head -n 1)
+          echo "UPLOAD_CSV=$UPLOAD_CSV" >> "$GITHUB_ENV"
+          echo "LATEST_CSV=$UPLOAD_CSV" >> "$GITHUB_ENV"
+          echo "has_file=true" >> "$GITHUB_OUTPUT"
+          echo "✅ 找到当日文件：$UPLOAD_CSV"
 
-          echo "✅ 选中的文件：$LATEST_CSV"
-          echo "UPLOAD_CSV=$LATEST_CSV" >> $GITHUB_ENV
-          echo "LATEST_CSV=$LATEST_CSV" >> $GITHUB_ENV
+      - name: Set up Python
+        if: steps.precheck.outputs.has_file == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
 
-          # 从文件名中提取 YYYYMMDD 作为 DATE_TAG
-          DATE_TAG=$(echo "$LATEST_CSV" | sed -E 's/.*_([0-9]{8})\.csv$/\1/')
-          if [[ ! "$DATE_TAG" =~ ^[0-9]{8}$ ]]; then
-            echo "❌ 无法从文件名解析日期：$LATEST_CSV"
-            exit 1
-          fi
-          echo "DATE_TAG=$DATE_TAG" >> $GITHUB_ENV
-          echo "📅 DATE_TAG: $DATE_TAG"
+      - name: Install dependencies
+        if: steps.precheck.outputs.has_file == 'true'
+        run: |
+          python -m pip install --upgrade pip
+          pip install --no-cache-dir google-api-python-client google-auth google-auth-oauthlib google-auth-httplib2
 
       - name: Upload to Google Drive
+        if: steps.precheck.outputs.has_file == 'true'
         env:
           GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
           GDRIVE_CLIENT_ID: ${{ secrets.GDRIVE_CLIENT_ID }}
           GDRIVE_CLIENT_SECRET: ${{ secrets.GDRIVE_CLIENT_SECRET }}
           GDRIVE_REFRESH_TOKEN: ${{ secrets.GDRIVE_REFRESH_TOKEN }}
-          # 这里的 LATEST_CSV / DATE_TAG 已在上一步写入 GITHUB_ENV，会自动注入到本 step 的环境变量
+          # LATEST_CSV / DATE_TAG 已在 Precheck 步写入 $GITHUB_ENV
         run: |
           python upload_to_gdrive.py
+
+      # 当天没有文件时的收尾信息（成功结束）
+      - name: Done / skipped
+        if: steps.precheck.outputs.has_file != 'true'
+        run: echo "今天未生成CSV，已跳过上传。"
