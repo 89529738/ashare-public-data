@@ -1,13 +1,13 @@
 name: Upload to Google Drive
 
 on:
-  workflow_dispatch:  # 允许手动触发
+  workflow_dispatch:  # 手动触发
 
 jobs:
   upload:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repo
+      - name: Checkout repository
         uses: actions/checkout@v3
 
       - name: Set up Python
@@ -18,51 +18,20 @@ jobs:
       - name: Install dependencies
         run: |
           pip install --upgrade pip
-          pip install --no-cache-dir gdown pydrive
+          pip install --no-cache-dir pydrive
 
-      - name: Prepare environment
+      - name: Save credentials to creds.json
         run: |
-          echo "$DRIVE_CREDENTIALS_JSON" > creds.json
-          LATEST_CSV=$(ls -t data/股票池合并_核准_*.csv | head -n 1)
-          echo "LATEST_CSV=$LATEST_CSV" >> $GITHUB_ENV
-        env:
-          DRIVE_CREDENTIALS_JSON: ${{ secrets.DRIVE_CREDENTIALS_JSON }}
+          echo "${{ secrets.DRIVE_CREDENTIALS_JSON }}" > creds.json
 
-      - name: Upload latest CSV to Google Drive
+      - name: Find latest CSV
+        id: find_csv
+        run: |
+          LATEST_CSV=$(ls -t data/股票池合并_核准_*.csv | head -n 1)
+          echo "latest_file=$LATEST_CSV" >> $GITHUB_OUTPUT
+
+      - name: Upload to Google Drive
         env:
           GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
         run: |
-          python <<EOF
-import os
-from pydrive.auth import GoogleAuth
-from pydrive.drive import GoogleDrive
-
-try:
-    creds_path = "creds.json"
-    latest_csv = os.environ["LATEST_CSV"]
-    folder_id = os.environ["GDRIVE_FOLDER_ID"]
-
-    print(f"Uploading file: {latest_csv}")
-
-    # 设置 PyDrive 授权
-    gauth = GoogleAuth()
-    gauth.LoadCredentialsFile(creds_path)
-    if gauth.credentials is None:
-        gauth.LocalWebserverAuth()
-    else:
-        gauth.Authorize()
-    gauth.SaveCredentialsFile(creds_path)
-
-    drive = GoogleDrive(gauth)
-
-    file_name = os.path.basename(latest_csv)
-    f = drive.CreateFile({'title': file_name, 'parents': [{'id': folder_id}]})
-    f.SetContentFile(latest_csv)
-    f.Upload()
-
-    print(f"✅ Upload successful: {file_name}")
-
-except Exception as e:
-    print(f"❌ Upload failed: {e}")
-    raise SystemExit(1)
-EOF
+          python upload_to_gdrive.py "${{ steps.find_csv.outputs.latest_file }}" "${{ secrets.GDRIVE_FOLDER_ID }}"
