@@ -1,5 +1,6 @@
 import os
 import mimetypes
+from datetime import datetime, timezone, timedelta
 
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
@@ -8,19 +9,39 @@ from googleapiclient.http import MediaFileUpload
 from googleapiclient.errors import HttpError
 
 
-# === 环境变量 ===
-FOLDER_ID = os.environ["GDRIVE_FOLDER_ID"]          # 目标 Google Drive 文件夹 ID
-CLIENT_ID = os.environ["GDRIVE_CLIENT_ID"]          # OAuth 客户端 ID
-CLIENT_SECRET = os.environ["GDRIVE_CLIENT_SECRET"]  # OAuth 客户端密钥
-REFRESH_TOKEN = os.environ["GDRIVE_REFRESH_TOKEN"]  # OAuth refresh_token
-CSV_PATH = os.environ.get("LATEST_CSV")             # 待上传的 CSV 文件路径（由前一步工作流写入）
-
-if not CSV_PATH or not os.path.exists(CSV_PATH):
-    raise SystemExit(f"❌ 目标文件不存在: {CSV_PATH}")
+# === 必填：来自 GitHub Secrets / 运行环境 ===
+FOLDER_ID = os.environ["GDRIVE_FOLDER_ID"]           # 目标文件夹 ID
+CLIENT_ID = os.environ["GDRIVE_CLIENT_ID"]
+CLIENT_SECRET = os.environ["GDRIVE_CLIENT_SECRET"]
+REFRESH_TOKEN = os.environ["GDRIVE_REFRESH_TOKEN"]
+CSV_PATH = os.environ.get("LATEST_CSV")               # 源 CSV 文件（通常是 *_latest.csv）
+DATE_TAG = os.environ.get("DATE_TAG")                 # 期待的日期标签（如 20250817）
 
 
-def get_service():
-    """用 refresh_token 构建 Google Drive service 客户端"""
+def _today_cn_yyyymmdd() -> str:
+    """默认使用北京时间（UTC+8）的当天日期。"""
+    # GitHub runner 是 UTC，用 +8小时得到北京时间
+    dt = datetime.utcnow() + timedelta(hours=8)
+    return dt.strftime("%Y%m%d")
+
+
+def _build_target_name(src_path: str, date_tag: str) -> str:
+    """
+    把 *_latest.csv 改成 *_YYYYMMDD.csv；
+    若源文件名里没有 _latest，也会按 <name>_YYYYMMDD.csv 命名。
+    """
+    base = os.path.basename(src_path)
+    stem, ext = os.path.splitext(base)
+    if not ext:
+        ext = ".csv"  # 兜底
+
+    # 去掉 _latest
+    stem_no_latest = stem.replace("_latest", "")
+    # 拼成带日期的新名字
+    return f"{stem_no_latest}_{date_tag}{ext}"
+
+
+def _get_service():
     creds = Credentials(
         None,
         refresh_token=REFRESH_TOKEN,
@@ -29,45 +50,46 @@ def get_service():
         client_secret=CLIENT_SECRET,
         scopes=["https://www.googleapis.com/auth/drive.file"],
     )
-    # 用 refresh_token 换取访问令牌
     creds.refresh(Request())
-
-    # cache_discovery=False 防止某些环境下的缓存警告
     return build("drive", "v3", credentials=creds, cache_discovery=False)
 
 
-def upload_or_update(service, file_path: str, folder_id: str):
-    """如已存在同名文件则更新，否则上传新文件到指定文件夹"""
-    fname = os.path.basename(file_path)
+def upload_or_update(service, file_path: str, folder_id: str, target_name: str):
     mime_type = mimetypes.guess_type(file_path)[0] or "text/csv"
 
-    # 先把文件名中的单引号转义，然后再放进 f-string —— 这是修复点
-    escaped_name = fname.replace("'", "\\'")
-    q = f"name = '{escaped_name}' and '{folder_id}' in parents and trashed = false"
+    # Drive 查询：同名 + 同父文件夹
+    safe_name = target_name.replace("'", "\\'")
+    q = f"name = '{safe_name}' and '{folder_id}' in parents and trashed = false"
 
-    # 查询是否已有同名文件
-    r = service.files().list(q=q, spaces="drive", fields="files(id,name)").execute()
+    r = service.files().list(
+        q=q, spaces="drive", fields="files(id,name)", pageSize=1
+    ).execute()
 
     media = MediaFileUpload(file_path, mimetype=mime_type, resumable=True)
 
     if r.get("files"):
-        # 已存在：走更新
         file_id = r["files"][0]["id"]
         service.files().update(fileId=file_id, media_body=media).execute()
-        print(f"♻️ 已更新：{fname}  (fileId={file_id})")
+        print(f"♻️ 已更新：{target_name}  (fileId={file_id})")
     else:
-        # 不存在：新建并上传
-        meta = {"name": fname, "parents": [folder_id]}
+        meta = {"name": target_name, "parents": [folder_id]}
         created = service.files().create(body=meta, media_body=media, fields="id").execute()
-        print(f"✅ 已上传：{fname}  (fileId={created['id']})")
+        print(f"✅ 已上传：{target_name}  (fileId={created['id']})")
 
 
 def main():
+    if not CSV_PATH or not os.path.exists(CSV_PATH):
+        raise SystemExit(f"❌ 目标文件不存在: {CSV_PATH}")
+
+    # 准备日期标签
+    date_tag = DATE_TAG or _today_cn_yyyymmdd()
+    target_name = _build_target_name(CSV_PATH, date_tag)
+
     try:
-        print(f"➡️ 准备上传：{CSV_PATH}")
-        print(f"➡️ 目标文件夹：{FOLDER_ID}")
-        service = get_service()
-        upload_or_update(service, CSV_PATH, FOLDER_ID)
+        print(f"➡️ 源文件：{CSV_PATH}")
+        print(f"➡️ 目标名：{target_name}")
+        service = _get_service()
+        upload_or_update(service, CSV_PATH, FOLDER_ID, target_name)
     except HttpError as e:
         print("❌ Google Drive API 错误：", e)
         raise
