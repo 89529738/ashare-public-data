@@ -3,7 +3,7 @@ name: Upload to Google Drive
 on:
   # 手动运行
   workflow_dispatch:
-  # 定时：北京时间 17:30（= UTC 09:30），周一至周五
+  # 定时：北京时间 18:30（= UTC 09:30），周一至周五
   schedule:
     - cron: '30 9 * * 1-5'
 
